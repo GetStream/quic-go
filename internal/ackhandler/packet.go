@@ -18,6 +18,7 @@ type packet struct {
 	EncryptionLevel protocol.EncryptionLevel
 
 	IsPathMTUProbePacket bool // We don't report the loss of Path MTU probe packets to the congestion controller.
+	IsDatagram           bool // We don't report the loss of datagram packets to the congestion controller.
 
 	includedInBytesInFlight bool
 	declaredLost            bool
@@ -25,7 +26,7 @@ type packet struct {
 }
 
 func (p *packet) outstanding() bool {
-	return !p.declaredLost && !p.skippedPacket && !p.IsPathMTUProbePacket
+	return !p.declaredLost && !p.skippedPacket && !p.IsPathMTUProbePacket && !p.IsDatagram
 }
 
 var packetPool = sync.Pool{New: func() any { return &packet{} }}
@@ -43,6 +44,7 @@ func getPacket() *packet {
 	p.includedInBytesInFlight = false
 	p.declaredLost = false
 	p.skippedPacket = false
+	p.IsDatagram = false
 	return p
 }
 

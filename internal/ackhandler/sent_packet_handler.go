@@ -274,6 +274,11 @@ func (h *sentPacketHandler) SentPacket(
 		return
 	}
 
+	isDatagram := false
+	if len(frames) > 0 {
+		_, isDatagram = frames[0].Frame.(*wire.DatagramFrame)
+	}
+
 	p := getPacket()
 	p.SendTime = t
 	p.PacketNumber = pn
@@ -282,6 +287,7 @@ func (h *sentPacketHandler) SentPacket(
 	p.LargestAcked = largestAcked
 	p.StreamFrames = streamFrames
 	p.Frames = frames
+	p.IsDatagram = isDatagram
 	p.IsPathMTUProbePacket = isPathMTUProbePacket
 	p.includedInBytesInFlight = true
 
@@ -657,7 +663,7 @@ func (h *sentPacketHandler) detectLostPackets(now time.Time, encLevel protocol.E
 				// the bytes in flight need to be reduced no matter if the frames in this packet will be retransmitted
 				h.removeFromBytesInFlight(p)
 				h.queueFramesForRetransmission(p)
-				if !p.IsPathMTUProbePacket {
+				if !p.IsPathMTUProbePacket && !p.IsDatagram {
 					h.congestion.OnCongestionEvent(p.PacketNumber, p.Length, priorInFlight)
 				}
 				if encLevel == protocol.Encryption1RTT && h.ecnTracker != nil {
