@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/quic-go/quic-go"
-	mockquic "github.com/quic-go/quic-go/internal/mocks/quic"
-	"github.com/quic-go/quic-go/internal/protocol"
-	"github.com/quic-go/quic-go/internal/testdata"
-	"github.com/quic-go/quic-go/internal/utils"
-	"github.com/quic-go/quic-go/quicvarint"
+	"github.com/GetStream/quic-go"
+	mockquic "github.com/GetStream/quic-go/internal/mocks/quic"
+	"github.com/GetStream/quic-go/internal/protocol"
+	"github.com/GetStream/quic-go/internal/testdata"
+	"github.com/GetStream/quic-go/internal/utils"
+	"github.com/GetStream/quic-go/quicvarint"
 
 	"github.com/quic-go/qpack"
 	"go.uber.org/mock/gomock"

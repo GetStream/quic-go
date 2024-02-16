@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/quic-go/quic-go/internal/protocol"
-	"github.com/quic-go/quic-go/internal/utils"
-	"github.com/quic-go/quic-go/logging"
+	"github.com/GetStream/quic-go/internal/protocol"
+	"github.com/GetStream/quic-go/internal/utils"
+	"github.com/GetStream/quic-go/logging"
 )
 
 const (

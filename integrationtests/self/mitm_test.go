@@ -12,11 +12,11 @@ import (
 
 	"golang.org/x/exp/rand"
 
-	"github.com/quic-go/quic-go"
-	quicproxy "github.com/quic-go/quic-go/integrationtests/tools/proxy"
-	"github.com/quic-go/quic-go/internal/protocol"
-	"github.com/quic-go/quic-go/internal/wire"
-	"github.com/quic-go/quic-go/testutils"
+	"github.com/GetStream/quic-go"
+	quicproxy "github.com/GetStream/quic-go/integrationtests/tools/proxy"
+	"github.com/GetStream/quic-go/internal/protocol"
+	"github.com/GetStream/quic-go/internal/wire"
+	"github.com/GetStream/quic-go/testutils"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

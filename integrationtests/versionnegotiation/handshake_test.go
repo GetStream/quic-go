@@ -8,10 +8,10 @@ import (
 	"net"
 	"time"
 
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/integrationtests/tools/israce"
-	"github.com/quic-go/quic-go/internal/protocol"
-	"github.com/quic-go/quic-go/logging"
+	"github.com/GetStream/quic-go"
+	"github.com/GetStream/quic-go/integrationtests/tools/israce"
+	"github.com/GetStream/quic-go/internal/protocol"
+	"github.com/GetStream/quic-go/logging"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

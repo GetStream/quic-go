@@ -3,8 +3,8 @@ package ackhandler
 import (
 	"time"
 
-	"github.com/quic-go/quic-go/internal/protocol"
-	"github.com/quic-go/quic-go/internal/wire"
+	"github.com/GetStream/quic-go/internal/protocol"
+	"github.com/GetStream/quic-go/internal/wire"
 )
 
 // SentPacketHandler handles ACKs received for outgoing packets
