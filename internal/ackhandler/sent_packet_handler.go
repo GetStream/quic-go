@@ -274,11 +274,6 @@ func (h *sentPacketHandler) SentPacket(
 		return
 	}
 
-	isDatagram := false
-	if len(frames) > 0 {
-		_, isDatagram = frames[0].Frame.(*wire.DatagramFrame)
-	}
-
 	p := getPacket()
 	p.SendTime = t
 	p.PacketNumber = pn
@@ -287,7 +282,7 @@ func (h *sentPacketHandler) SentPacket(
 	p.LargestAcked = largestAcked
 	p.StreamFrames = streamFrames
 	p.Frames = frames
-	p.IsDatagram = isDatagram
+	p.IsDatagram = isDatagramPacket(frames)
 	p.IsPathMTUProbePacket = isPathMTUProbePacket
 	p.includedInBytesInFlight = true
 
@@ -296,6 +291,16 @@ func (h *sentPacketHandler) SentPacket(
 		h.tracer.UpdatedMetrics(h.rttStats, h.congestion.GetCongestionWindow(), h.bytesInFlight, h.packetsInFlight())
 	}
 	h.setLossDetectionTimer()
+}
+
+func isDatagramPacket(frames []Frame) bool {
+	var datagramCount int
+	for _, f := range frames {
+		if _, ok := f.Frame.(*wire.DatagramFrame); ok {
+			datagramCount++
+		}
+	}
+	return datagramCount == len(frames)
 }
 
 func (h *sentPacketHandler) getPacketNumberSpace(encLevel protocol.EncryptionLevel) *packetNumberSpace {
