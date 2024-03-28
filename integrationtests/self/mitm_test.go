@@ -41,8 +41,9 @@ var _ = Describe("MITM test", func() {
 			Conn:               c,
 			ConnectionIDLength: connIDLen,
 		}
+		addTracer(serverTransport)
 		if forceAddressValidation {
-			serverTransport.MaxUnvalidatedHandshakes = -1
+			serverTransport.VerifySourceAddress = func(net.Addr) bool { return true }
 		}
 		ln, err := serverTransport.Listen(getTLSConfig(), serverConfig)
 		Expect(err).ToNot(HaveOccurred())
@@ -86,6 +87,7 @@ var _ = Describe("MITM test", func() {
 			Conn:               clientUDPConn,
 			ConnectionIDLength: connIDLen,
 		}
+		addTracer(clientTransport)
 	})
 
 	Context("unsuccessful attacks", func() {

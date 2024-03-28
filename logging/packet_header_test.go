@@ -3,6 +3,8 @@ package logging_test
 import (
 	"github.com/GetStream/quic-go/internal/protocol"
 	"github.com/GetStream/quic-go/internal/wire"
+	. "github.com/GetStream/quic-go/logging"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

@@ -163,6 +163,9 @@ type Connection interface {
 	OpenStream() (Stream, error)
 	// OpenStreamSync opens a new bidirectional QUIC stream.
 	// It blocks until a new stream can be opened.
+	// There is no signaling to the peer about new streams:
+	// The peer can only accept the stream after data has been sent on the stream,
+	// or the stream has been reset or closed.
 	// If the error is non-nil, it satisfies the net.Error interface.
 	// If the connection was closed due to a timeout, Timeout() will be true.
 	OpenStreamSync(context.Context) (Stream, error)
@@ -330,8 +333,15 @@ type Config struct {
 	Tracer          func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
 }
 
+// ClientHelloInfo contains information about an incoming connection attempt.
 type ClientHelloInfo struct {
+	// RemoteAddr is the remote address on the Initial packet.
+	// Unless AddrVerified is set, the address is not yet verified, and could be a spoofed IP address.
 	RemoteAddr net.Addr
+	// AddrVerified says if the remote address was verified using QUIC's Retry mechanism.
+	// Note that the Retry mechanism costs one network roundtrip,
+	// and is not performed unless Transport.MaxUnvalidatedHandshakes is surpassed.
+	AddrVerified bool
 }
 
 // ConnectionState records basic details about a QUIC connection

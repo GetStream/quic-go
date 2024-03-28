@@ -282,9 +282,9 @@ func (h *sentPacketHandler) SentPacket(
 	p.LargestAcked = largestAcked
 	p.StreamFrames = streamFrames
 	p.Frames = frames
-	p.IsDatagram = isDatagramPacket(frames)
 	p.IsPathMTUProbePacket = isPathMTUProbePacket
 	p.includedInBytesInFlight = true
+	p.IsDatagram = isDatagramPacket(frames)
 
 	pnSpace.history.SentAckElicitingPacket(p)
 	if h.tracer != nil && h.tracer.UpdatedMetrics != nil {

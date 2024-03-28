@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +13,14 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/GetStream/quic-go"
 	"github.com/GetStream/quic-go/http3"
+	quicproxy "github.com/GetStream/quic-go/integrationtests/tools/proxy"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -86,7 +89,7 @@ var _ = Describe("HTTP tests", func() {
 		server = &http3.Server{
 			Handler:    mux,
 			TLSConfig:  getTLSConfig(),
-			QuicConfig: getQuicConfig(nil),
+			QUICConfig: getQuicConfig(&quic.Config{Allow0RTT: true}),
 		}
 
 		addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:0")
@@ -112,9 +115,12 @@ var _ = Describe("HTTP tests", func() {
 
 	BeforeEach(func() {
 		rt = &http3.RoundTripper{
-			TLSClientConfig:    getTLSClientConfigWithoutServerName(),
+			TLSClientConfig: getTLSClientConfigWithoutServerName(),
+			QUICConfig: getQuicConfig(&quic.Config{
+				MaxIdleTimeout: 10 * time.Second,
+				Allow0RTT:      true,
+			}),
 			DisableCompression: true,
-			QuicConfig:         getQuicConfig(&quic.Config{MaxIdleTimeout: 10 * time.Second}),
 		}
 		client = &http.Client{Transport: rt}
 	})
@@ -558,5 +564,81 @@ var _ = Describe("HTTP tests", func() {
 		resp, err := client.Get(fmt.Sprintf("https://localhost:%d/conn-context", port))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(200))
+	})
+
+	It("checks the server's settings", func() {
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/hello", port), nil)
+		Expect(err).ToNot(HaveOccurred())
+		testErr := errors.New("test error")
+		_, err = rt.RoundTripOpt(req, http3.RoundTripOpt{CheckSettings: func(settings http3.Settings) error {
+			Expect(settings.EnableExtendedConnect).To(BeTrue())
+			Expect(settings.EnableDatagram).To(BeFalse())
+			Expect(settings.Other).To(BeEmpty())
+			return testErr
+		}})
+		Expect(err).To(MatchError(err))
+	})
+
+	Context("0-RTT", func() {
+		runCountingProxy := func(serverPort int, rtt time.Duration) (*quicproxy.QuicProxy, *atomic.Uint32) {
+			var num0RTTPackets atomic.Uint32
+			proxy, err := quicproxy.NewQuicProxy("localhost:0", &quicproxy.Opts{
+				RemoteAddr: fmt.Sprintf("localhost:%d", serverPort),
+				DelayPacket: func(_ quicproxy.Direction, data []byte) time.Duration {
+					if contains0RTTPacket(data) {
+						num0RTTPackets.Add(1)
+					}
+					return rtt / 2
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			return proxy, &num0RTTPackets
+		}
+
+		It("sends 0-RTT GET requests", func() {
+			proxy, num0RTTPackets := runCountingProxy(port, scaleDuration(50*time.Millisecond))
+			defer proxy.Close()
+
+			tlsConf := getTLSClientConfigWithoutServerName()
+			puts := make(chan string, 10)
+			tlsConf.ClientSessionCache = newClientSessionCache(tls.NewLRUClientSessionCache(10), nil, puts)
+			rt := &http3.RoundTripper{
+				TLSClientConfig: tlsConf,
+				QUICConfig: getQuicConfig(&quic.Config{
+					MaxIdleTimeout: 10 * time.Second,
+					Allow0RTT:      true,
+				}),
+				DisableCompression: true,
+			}
+			defer rt.Close()
+
+			mux.HandleFunc("/0rtt", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(strconv.FormatBool(!r.TLS.HandshakeComplete)))
+			})
+			req, err := http.NewRequest(http3.MethodGet0RTT, fmt.Sprintf("https://localhost:%d/0rtt", proxy.LocalPort()), nil)
+			Expect(err).ToNot(HaveOccurred())
+			rsp, err := rt.RoundTrip(req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(rsp.StatusCode).To(BeEquivalentTo(200))
+			data, err := io.ReadAll(rsp.Body)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(data)).To(Equal("false"))
+			Expect(num0RTTPackets.Load()).To(BeZero())
+			Eventually(puts).Should(Receive())
+
+			rt2 := &http3.RoundTripper{
+				TLSClientConfig:    rt.TLSClientConfig,
+				QUICConfig:         rt.QUICConfig,
+				DisableCompression: true,
+			}
+			defer rt2.Close()
+			rsp, err = rt2.RoundTrip(req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(rsp.StatusCode).To(BeEquivalentTo(200))
+			data, err = io.ReadAll(rsp.Body)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(data)).To(Equal("true"))
+			Expect(num0RTTPackets.Load()).To(BeNumerically(">", 0))
+		})
 	})
 })

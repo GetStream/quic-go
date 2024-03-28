@@ -156,10 +156,10 @@ type Server struct {
 	//
 	// Otherwise, if Port is not set and underlying QUIC listeners do not
 	// have valid port numbers, the port part is used in Alt-Svc headers set
-	// with SetQuicHeaders.
+	// with SetQUICHeaders.
 	Addr string
 
-	// Port is used in Alt-Svc response headers set with SetQuicHeaders. If
+	// Port is used in Alt-Svc response headers set with SetQUICHeaders. If
 	// needed Port can be manually set when the Server is created.
 	//
 	// This is useful when a Layer 4 firewall is redirecting UDP traffic and
@@ -171,19 +171,18 @@ type Server struct {
 	// set for ListenAndServe and Serve methods.
 	TLSConfig *tls.Config
 
-	// QuicConfig provides the parameters for QUIC connection created with
-	// Serve. If nil, it uses reasonable default values.
+	// QUICConfig provides the parameters for QUIC connection created with Serve.
+	// If nil, it uses reasonable default values.
 	//
-	// Configured versions are also used in Alt-Svc response header set with
-	// SetQuicHeaders.
-	QuicConfig *quic.Config
+	// Configured versions are also used in Alt-Svc response header set with SetQUICHeaders.
+	QUICConfig *quic.Config
 
 	// Handler is the HTTP request handler to use. If not set, defaults to
 	// http.NotFound.
 	Handler http.Handler
 
 	// EnableDatagrams enables support for HTTP/3 datagrams.
-	// If set to true, QuicConfig.EnableDatagram will be set.
+	// If set to true, QUICConfig.EnableDatagram will be set.
 	// See https://datatracker.ietf.org/doc/html/rfc9297.
 	EnableDatagrams bool
 
@@ -310,11 +309,11 @@ func (s *Server) serveConn(tlsConf *tls.Config, conn net.PacketConn) error {
 	}
 
 	baseConf := ConfigureTLSConfig(tlsConf)
-	quicConf := s.QuicConfig
+	quicConf := s.QUICConfig
 	if quicConf == nil {
 		quicConf = &quic.Config{Allow0RTT: true}
 	} else {
-		quicConf = s.QuicConfig.Clone()
+		quicConf = s.QUICConfig.Clone()
 	}
 	if s.EnableDatagrams {
 		quicConf.EnableDatagrams = true
@@ -359,8 +358,8 @@ func (s *Server) generateAltSvcHeader() {
 
 	// This code assumes that we will use protocol.SupportedVersions if no quic.Config is passed.
 	supportedVersions := protocol.SupportedVersions
-	if s.QuicConfig != nil && len(s.QuicConfig.Versions) > 0 {
-		supportedVersions = s.QuicConfig.Versions
+	if s.QUICConfig != nil && len(s.QUICConfig.Versions) > 0 {
+		supportedVersions = s.QUICConfig.Versions
 	}
 
 	// keep track of which have been seen so we don't yield duplicate values
@@ -427,7 +426,7 @@ func (s *Server) addListener(l *QUICEarlyListener) error {
 	if port, err := extractPort(laddr.String()); err == nil {
 		s.listeners[l] = listenerInfo{port}
 	} else {
-		s.logger.Errorf("Unable to extract port from listener %s, will not be announced using SetQuicHeaders: %s", laddr, err)
+		s.logger.Errorf("Unable to extract port from listener %s, will not be announced using SetQUICHeaders: %s", laddr, err)
 		s.listeners[l] = listenerInfo{}
 	}
 	s.generateAltSvcHeader()
@@ -451,10 +450,21 @@ func (s *Server) handleConn(conn quic.Connection) error {
 	}
 	b := make([]byte, 0, 64)
 	b = quicvarint.Append(b, streamTypeControlStream) // stream type
-	b = (&settingsFrame{Datagram: s.EnableDatagrams, Other: s.AdditionalSettings}).Append(b)
+	b = (&settingsFrame{
+		Datagram:        s.EnableDatagrams,
+		ExtendedConnect: true,
+		Other:           s.AdditionalSettings,
+	}).Append(b)
 	str.Write(b)
 
-	go s.handleUnidirectionalStreams(conn)
+	hconn := newConnection(
+		conn,
+		s.EnableDatagrams,
+		s.UniStreamHijacker,
+		protocol.PerspectiveServer,
+		s.logger,
+	)
+	go hconn.HandleUnidirectionalStreams()
 
 	// Process all requests immediately.
 	// It's the client's responsibility to decide which requests are eligible for 0-RTT.
@@ -490,63 +500,6 @@ func (s *Server) handleConn(conn quic.Connection) error {
 			}
 			str.Close()
 		}()
-	}
-}
-
-func (s *Server) handleUnidirectionalStreams(conn quic.Connection) {
-	for {
-		str, err := conn.AcceptUniStream(context.Background())
-		if err != nil {
-			s.logger.Debugf("accepting unidirectional stream failed: %s", err)
-			return
-		}
-
-		go func(str quic.ReceiveStream) {
-			streamType, err := quicvarint.Read(quicvarint.NewReader(str))
-			if err != nil {
-				if s.UniStreamHijacker != nil && s.UniStreamHijacker(StreamType(streamType), conn, str, err) {
-					return
-				}
-				s.logger.Debugf("reading stream type on stream %d failed: %s", str.StreamID(), err)
-				return
-			}
-			// We're only interested in the control stream here.
-			switch streamType {
-			case streamTypeControlStream:
-			case streamTypeQPACKEncoderStream, streamTypeQPACKDecoderStream:
-				// Our QPACK implementation doesn't use the dynamic table yet.
-				// TODO: check that only one stream of each type is opened.
-				return
-			case streamTypePushStream: // only the server can push
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeStreamCreationError), "")
-				return
-			default:
-				if s.UniStreamHijacker != nil && s.UniStreamHijacker(StreamType(streamType), conn, str, nil) {
-					return
-				}
-				str.CancelRead(quic.StreamErrorCode(ErrCodeStreamCreationError))
-				return
-			}
-			f, err := parseNextFrame(str, nil)
-			if err != nil {
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameError), "")
-				return
-			}
-			sf, ok := f.(*settingsFrame)
-			if !ok {
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeMissingSettings), "")
-				return
-			}
-			if !sf.Datagram {
-				return
-			}
-			// If datagram support was enabled on our side as well as on the client side,
-			// we can expect it to have been negotiated both on the transport and on the HTTP/3 layer.
-			// Note: ConnectionState() will block until the handshake is complete (relevant when using 0-RTT).
-			if s.EnableDatagrams && !conn.ConnectionState().SupportsDatagrams {
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeSettingsError), "missing QUIC Datagram support")
-			}
-		}(str)
 	}
 }
 
@@ -697,30 +650,34 @@ func (s *Server) CloseGracefully(timeout time.Duration) error {
 	return nil
 }
 
-// ErrNoAltSvcPort is the error returned by SetQuicHeaders when no port was found
+// ErrNoAltSvcPort is the error returned by SetQUICHeaders when no port was found
 // for Alt-Svc to announce. This can happen if listening on a PacketConn without a port
 // (UNIX socket, for example) and no port is specified in Server.Port or Server.Addr.
 var ErrNoAltSvcPort = errors.New("no port can be announced, specify it explicitly using Server.Port or Server.Addr")
 
-// SetQuicHeaders can be used to set the proper headers that announce that this server supports HTTP/3.
-// The values set by default advertise all of the ports the server is listening on, but can be
-// changed to a specific port by setting Server.Port before launching the serverr.
+// SetQUICHeaders can be used to set the proper headers that announce that this server supports HTTP/3.
+// The values set by default advertise all the ports the server is listening on, but can be
+// changed to a specific port by setting Server.Port before launching the server.
 // If no listener's Addr().String() returns an address with a valid port, Server.Addr will be used
 // to extract the port, if specified.
 // For example, a server launched using ListenAndServe on an address with port 443 would set:
 //
-//	Alt-Svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
-func (s *Server) SetQuicHeaders(hdr http.Header) error {
+//	Alt-Svc: h3=":443"; ma=2592000
+func (s *Server) SetQUICHeaders(hdr http.Header) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
 	if s.altSvcHeader == "" {
 		return ErrNoAltSvcPort
 	}
-	// use the map directly to avoid constant canonicalization
-	// since the key is already canonicalized
+	// use the map directly to avoid constant canonicalization since the key is already canonicalized
 	hdr["Alt-Svc"] = append(hdr["Alt-Svc"], s.altSvcHeader)
 	return nil
+}
+
+// Deprecated: use SetQUICHeaders instead.
+func (s *Server) SetQuicHeaders(hdr http.Header) error {
+	return s.SetQUICHeaders(hdr)
 }
 
 // ListenAndServeQUIC listens on the UDP network address addr and calls the
@@ -780,7 +737,7 @@ func ListenAndServe(addr, certFile, keyFile string, handler http.Handler) error 
 	qErr := make(chan error, 1)
 	go func() {
 		hErr <- http.ListenAndServeTLS(addr, certFile, keyFile, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			quicServer.SetQuicHeaders(w.Header())
+			quicServer.SetQUICHeaders(w.Header())
 			handler.ServeHTTP(w, r)
 		}))
 	}()

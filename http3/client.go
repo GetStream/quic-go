@@ -21,9 +21,14 @@ import (
 	"github.com/quic-go/qpack"
 )
 
-// MethodGet0RTT allows a GET request to be sent using 0-RTT.
-// Note that 0-RTT data doesn't provide replay protection.
-const MethodGet0RTT = "GET_0RTT"
+const (
+	// MethodGet0RTT allows a GET request to be sent using 0-RTT.
+	// Note that 0-RTT doesn't provide replay protection and should only be used for idempotent requests.
+	MethodGet0RTT = "GET_0RTT"
+	// MethodHead0RTT allows a HEAD request to be sent using 0-RTT.
+	// Note that 0-RTT doesn't provide replay protection and should only be used for idempotent requests.
+	MethodHead0RTT = "HEAD_0RTT"
+)
 
 const (
 	defaultUserAgent              = "quic-go HTTP/3"
@@ -58,6 +63,8 @@ type client struct {
 	dialer       dialFunc
 	handshakeErr error
 
+	hconn *connection
+
 	requestWriter *requestWriter
 
 	decoder *qpack.Decoder
@@ -73,6 +80,10 @@ var _ roundTripCloser = &client{}
 func newClient(hostname string, tlsConf *tls.Config, opts *roundTripperOpts, conf *quic.Config, dialer dialFunc) (roundTripCloser, error) {
 	if conf == nil {
 		conf = defaultQuicConfig.Clone()
+		conf.EnableDatagrams = opts.EnableDatagram
+	}
+	if opts.EnableDatagram && !conf.EnableDatagrams {
+		return nil, errors.New("HTTP Datagrams enabled, but QUIC Datagrams disabled")
 	}
 	if len(conf.Versions) == 0 {
 		conf = conf.Clone()
@@ -84,7 +95,6 @@ func newClient(hostname string, tlsConf *tls.Config, opts *roundTripperOpts, con
 	if conf.MaxIncomingStreams == 0 {
 		conf.MaxIncomingStreams = -1 // don't allow any bidirectional streams
 	}
-	conf.EnableDatagrams = opts.EnableDatagram
 	logger := utils.DefaultLogger.WithPrefix("h3 client")
 
 	if tlsConf == nil {
@@ -139,7 +149,14 @@ func (c *client) dial(ctx context.Context) error {
 	if c.opts.StreamHijacker != nil {
 		go c.handleBidirectionalStreams(conn)
 	}
-	go c.handleUnidirectionalStreams(conn)
+	c.hconn = newConnection(
+		conn,
+		c.opts.EnableDatagram,
+		c.opts.UniStreamHijacker,
+		protocol.PerspectiveClient,
+		c.logger,
+	)
+	go c.hconn.HandleUnidirectionalStreams()
 	return nil
 }
 
@@ -175,64 +192,6 @@ func (c *client) handleBidirectionalStreams(conn quic.EarlyConnection) {
 				c.logger.Debugf("error handling stream: %s", err)
 			}
 			conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), "received HTTP/3 frame on bidirectional stream")
-		}(str)
-	}
-}
-
-func (c *client) handleUnidirectionalStreams(conn quic.EarlyConnection) {
-	for {
-		str, err := conn.AcceptUniStream(context.Background())
-		if err != nil {
-			c.logger.Debugf("accepting unidirectional stream failed: %s", err)
-			return
-		}
-
-		go func(str quic.ReceiveStream) {
-			streamType, err := quicvarint.Read(quicvarint.NewReader(str))
-			if err != nil {
-				if c.opts.UniStreamHijacker != nil && c.opts.UniStreamHijacker(StreamType(streamType), conn, str, err) {
-					return
-				}
-				c.logger.Debugf("reading stream type on stream %d failed: %s", str.StreamID(), err)
-				return
-			}
-			// We're only interested in the control stream here.
-			switch streamType {
-			case streamTypeControlStream:
-			case streamTypeQPACKEncoderStream, streamTypeQPACKDecoderStream:
-				// Our QPACK implementation doesn't use the dynamic table yet.
-				// TODO: check that only one stream of each type is opened.
-				return
-			case streamTypePushStream:
-				// We never increased the Push ID, so we don't expect any push streams.
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeIDError), "")
-				return
-			default:
-				if c.opts.UniStreamHijacker != nil && c.opts.UniStreamHijacker(StreamType(streamType), conn, str, nil) {
-					return
-				}
-				str.CancelRead(quic.StreamErrorCode(ErrCodeStreamCreationError))
-				return
-			}
-			f, err := parseNextFrame(str, nil)
-			if err != nil {
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameError), "")
-				return
-			}
-			sf, ok := f.(*settingsFrame)
-			if !ok {
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeMissingSettings), "")
-				return
-			}
-			if !sf.Datagram {
-				return
-			}
-			// If datagram support was enabled on our side as well as on the server side,
-			// we can expect it to have been negotiated both on the transport and on the HTTP/3 layer.
-			// Note: ConnectionState() will block until the handshake is complete (relevant when using 0-RTT).
-			if c.opts.EnableDatagram && !conn.ConnectionState().SupportsDatagrams {
-				conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeSettingsError), "missing QUIC Datagram support")
-			}
 		}(str)
 	}
 }
@@ -278,14 +237,35 @@ func (c *client) roundTripOpt(req *http.Request, opt RoundTripOpt) (*http.Respon
 	conn := *c.conn.Load()
 
 	// Immediately send out this request, if this is a 0-RTT request.
-	if req.Method == MethodGet0RTT {
+	switch req.Method {
+	case MethodGet0RTT:
+		// don't modify the original request
+		reqCopy := *req
+		req = &reqCopy
 		req.Method = http.MethodGet
-	} else {
+	case MethodHead0RTT:
+		// don't modify the original request
+		reqCopy := *req
+		req = &reqCopy
+		req.Method = http.MethodHead
+	default:
 		// wait for the handshake to complete
 		select {
 		case <-conn.HandshakeComplete():
 		case <-req.Context().Done():
 			return nil, req.Context().Err()
+		}
+	}
+
+	if opt.CheckSettings != nil {
+		// wait for the server's SETTINGS frame to arrive
+		select {
+		case <-c.hconn.ReceivedSettings():
+		case <-conn.Context().Done():
+			return nil, context.Cause(conn.Context())
+		}
+		if err := opt.CheckSettings(*c.hconn.Settings()); err != nil {
+			return nil, err
 		}
 	}
 
