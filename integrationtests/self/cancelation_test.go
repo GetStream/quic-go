@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/GetStream/quic-go"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

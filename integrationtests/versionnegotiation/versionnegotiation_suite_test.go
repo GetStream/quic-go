@@ -5,13 +5,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
+	"github.com/GetStream/quic-go"
 	"testing"
 
 	"github.com/GetStream/quic-go/integrationtests/tools"
 	"github.com/GetStream/quic-go/logging"
-
-	"github.com/GetStream/quic-go"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

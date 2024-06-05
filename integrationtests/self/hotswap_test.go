@@ -2,6 +2,7 @@ package self_test
 
 import (
 	"context"
+	"github.com/GetStream/quic-go"
 	"io"
 	"net"
 	"net/http"
@@ -9,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/GetStream/quic-go"
 	"github.com/GetStream/quic-go/http3"
 
 	. "github.com/onsi/ginkgo/v2"

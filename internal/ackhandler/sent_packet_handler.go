@@ -668,7 +668,7 @@ func (h *sentPacketHandler) detectLostPackets(now time.Time, encLevel protocol.E
 				// the bytes in flight need to be reduced no matter if the frames in this packet will be retransmitted
 				h.removeFromBytesInFlight(p)
 				h.queueFramesForRetransmission(p)
-				if !p.IsPathMTUProbePacket && !p.IsDatagram {
+				if !p.IsPathMTUProbePacket {
 					h.congestion.OnCongestionEvent(p.PacketNumber, p.Length, priorInFlight)
 				}
 				if encLevel == protocol.Encryption1RTT && h.ecnTracker != nil {

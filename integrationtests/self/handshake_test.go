@@ -5,16 +5,15 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/GetStream/quic-go"
 	"io"
 	"net"
 	"time"
 
-	"github.com/GetStream/quic-go"
 	quicproxy "github.com/GetStream/quic-go/integrationtests/tools/proxy"
 	"github.com/GetStream/quic-go/internal/protocol"
 	"github.com/GetStream/quic-go/internal/qerr"
 	"github.com/GetStream/quic-go/internal/qtls"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

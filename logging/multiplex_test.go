@@ -2,6 +2,7 @@ package logging_test
 
 import (
 	"errors"
+
 	"net"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/GetStream/quic-go/internal/protocol"
 	"github.com/GetStream/quic-go/internal/wire"
 	. "github.com/GetStream/quic-go/logging"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -199,6 +199,12 @@ var _ = Describe("Tracing", func() {
 			tr1.EXPECT().DroppedPacket(PacketTypeInitial, PacketNumber(42), ByteCount(1337), PacketDropHeaderParseError)
 			tr2.EXPECT().DroppedPacket(PacketTypeInitial, PacketNumber(42), ByteCount(1337), PacketDropHeaderParseError)
 			tracer.DroppedPacket(PacketTypeInitial, 42, 1337, PacketDropHeaderParseError)
+		})
+
+		It("traces the UpdatedMTU event", func() {
+			tr1.EXPECT().UpdatedMTU(ByteCount(1337), true)
+			tr2.EXPECT().UpdatedMTU(ByteCount(1337), true)
+			tracer.UpdatedMTU(1337, true)
 		})
 
 		It("traces the UpdatedCongestionState event", func() {
